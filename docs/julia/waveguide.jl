@@ -66,32 +66,66 @@ using Gridap.Visualization
 using Gridap.ReferenceFEs
 using GridapGmsh
 using GridapMakie, CairoMakie
+# MPI
+using GridapDistributed
+using PartitionedArrays
+using GridapPETSc
 
 using Femwell.Maxwell.Waveguide
 
 CairoMakie.inline!(true)
 
 # %% tags=["remove-stderr"]
-model = GmshDiscreteModel("mesh.msh")
-Ω = Triangulation(model)
 #fig = plot(Ω)
 #fig.axis.aspect=DataAspect()
 #wireframe!(Ω, color=:black, linewidth=1)
 #display(fig)
 
-labels = get_face_labeling(model)
-
-epsilons = ["core" => 3.5^2, "slab" => 1.44^2, "box" => 1.444^2, "clad" => 1.44^2]
-ε(tag) = Dict(get_tag_from_name(labels, u) => v for (u, v) in epsilons)[tag]
-
-
 #dΩ = Measure(Ω, 1)
-τ = CellField(get_face_tag(labels, num_cell_dims(model)), Ω)
 
-modes = calculate_modes(model, ε ∘ τ, λ = 1.55, num = 1, order = 1)
-println(n_eff(modes[1]))
 # write_mode_to_vtk("mode", modes[2])
+function modes_distributed(rank_partition, distribute)
 
+    parts = distribute(LinearIndices((rank_partition,)))
+    options = "-ksp_type cg -pc_type gamg -ksp_monitor"
+    GridapPETSc.with(args = split(options)) do
+        model = GmshDiscreteModel(parts, "mesh.msh")
+        Ω = Triangulation(model)
+        labels = get_face_labeling(model)
+        epsilons = ["core" => 3.5^2, "slab" => 1.44^2, "box" => 1.444^2, "clad" => 1.44^2]
+        ε(tag) = Dict(get_tag_from_name(labels, u) => v for (u, v) in epsilons)[tag]
+        τ = CellField(get_face_tag(labels, num_cell_dims(model)), Ω)
+
+        modes = calculate_modes(model, ε ∘ τ, λ = 1.55, num = 1, order = 1)
+
+
+        # order = 2
+        # u((x,y)) = (x+y)^order
+        # f(x) = -Δ(u,x)
+        # reffe = ReferenceFE(lagrangian,Float64,order)
+        # V = TestFESpace(model,reffe,dirichlet_tags=["boundary1","boundary2"])
+        # U = TrialFESpace(u,V)
+        # Ω = Triangulation(model)
+        # dΩ = Measure(Ω,2*order)
+        # a(u,v) = ∫( ∇(v)⋅∇(u) )dΩ
+        # l(v) = ∫( v*f )dΩ
+        # op = AffineFEOperator(a,l,U,V)
+        # solver = PETScLinearSolver()
+        # uh = solve(solver,op)
+        # writevtk(Ω,"results_ex4",cellfields=["uh"=>uh,"grad_uh"=>∇(uh)])
+    end
+
+end
+
+# %%
+rank_partition = 2
+with_mpi() do distribute
+    modes_distributed(rank_partition, distribute)
+end
+
+println(n_eff(modes[1]))
+
+# %%
 plot_mode(modes[1])
 #plot_mode(modes[2])
 modes
